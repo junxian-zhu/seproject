@@ -1,0 +1,87 @@
+class HJ212Parser:
+    """HJ212-2017 环保协议报文解析器"""
+
+    def __init__(self):
+        self.header = "##"
+        self.tail = "\r\n"
+
+    # ---------- 1. 格式合法性 ----------
+    def is_valid_message(self, message: str) -> bool:
+        if not message.startswith(self.header) or not message.endswith(self.tail):
+            return False
+        body = message[2:-2]
+        if len(body) < 8:
+            return False
+        try:
+            length = int(body[:4])
+        except ValueError:
+            return False
+        data_segment = body[4:4 + length]
+        crc = body[4 + length:8 + length]
+        return len(data_segment) == length and len(crc) == 4
+
+    # ---------- 2. CRC16 校验 ----------
+    def _crc16(self, data: bytes) -> int:
+        crc = 0xFFFF
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x0001:
+                    crc = (crc >> 1) ^ 0xA001
+                else:
+                    crc >>= 1
+        return crc
+
+    def validate_crc(self, message: str) -> bool:
+        if not self.is_valid_message(message):
+            return False
+        body = message[2:-2]
+        length = int(body[:4])
+        data_segment = body[4:4 + length]
+        expected = body[4 + length:8 + length].upper()
+        crc_val = self._crc16(data_segment.encode("utf-8"))
+        # 先高字节后低字节
+        calc = f"{crc_val:04X}"
+        return calc == expected
+
+    # ---------- 3. 数据段解析 ----------
+    def parse_data_segment(self, message: str) -> dict:
+        if not self.is_valid_message(message):
+            return {}
+        body = message[2:-2]
+        length = int(body[:4])
+        data_segment = body[4:4 + length]
+        result = {}
+        for item in data_segment.split(";"):
+            if "=" in item:
+                key, value = item.split("=", 1)
+                result[key.strip()] = value.strip()
+        return result
+
+    # ---------- 4. 监测因子提取 ----------
+    def extract_monitoring_data(self, message: str) -> dict:
+        data = self.parse_data_segment(message)
+        cp = data.get("CP", "")
+        if cp.startswith("&&") and cp.endswith("&&"):
+            cp = cp[2:-2]
+        factors = {}
+        for item in cp.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            key = key.strip()
+            # 监测因子形如 w01001-Rtd / a21026-Rtd
+            if "-" in key:
+                factors[key] = value.strip()
+        return factors
+
+
+    
+if __name__ == "__main__":
+    msg = ("##0101QN=20160801085857223;ST=32;CN=1062;PW=100000;"
+           "MN=010000A8900016F000169DC0;Flag=5;CP=&&RtdInterval=30&&1C80\r\n")
+    p = HJ212Parser()
+    print("格式合法:", p.is_valid_message(msg))
+    print("CRC校验:", p.validate_crc(msg))
+    print("数据段:", p.parse_data_segment(msg))
+    print("监测因子:", p.extract_monitoring_data(msg))
